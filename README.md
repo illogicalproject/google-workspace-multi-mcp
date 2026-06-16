@@ -8,9 +8,9 @@ The official Claude Google connector authenticates **one** account at a time. Th
 
 - **Multiple accounts** — connect as many Google accounts as you like; every tool takes an `account` parameter
 - **Gmail** — unified search across all accounts, read messages/threads, send, threaded replies, drafts, labels, trash
-- **Calendar** (read) — list calendars, browse and search events
+- **Calendar** (read/write) — list calendars, browse and search events, and create, update, delete, or quick-add events (with attendees and optional Google Meet links)
 - **Drive** (read/write) — list/search files, read content, create files & folders, rename, move, copy, trash, share
-- **Docs** (read/write) — create, read, append text, find-and-replace
+- **Docs** (read/write) — create, read, append, find-and-replace, plus **Markdown rendering** — turn Markdown into real Docs formatting (headings, bold/italic, `code`, links, bullet & numbered lists, blockquotes, tables)
 - **Sheets** (read/write) — create, add tabs, read/write/append ranges, clear
 
 ## Requirements
@@ -113,7 +113,7 @@ Scopes follow the `services` list in `config.json` (see step 4) — enable only 
 | Service | Scope | Google tier |
 |---|---|---|
 | Gmail | `gmail.readonly`, `gmail.send`, `gmail.compose`, `gmail.modify` | **Restricted** |
-| Calendar | `calendar.readonly` | Sensitive |
+| Calendar | `calendar.events` (read + create/edit/delete events) | Sensitive |
 | Drive | `drive` (full read/write) | **Restricted** |
 | Docs | `documents` | Sensitive |
 | Sheets | `spreadsheets` | Sensitive |
@@ -128,11 +128,11 @@ Every tool takes an `account` parameter matching a key in `config.json`.
 
 **Gmail:** `gmail_get_profile`, `gmail_search`, `gmail_read_message`, `gmail_read_thread`, `gmail_send`, `gmail_reply`, `gmail_create_draft`, `gmail_list_drafts`, `gmail_list_labels`, `gmail_modify_labels`, `gmail_trash`
 
-**Calendar:** `calendar_list_calendars`, `calendar_list_events`, `calendar_search`, `calendar_get_event`
+**Calendar:** `calendar_list_calendars`, `calendar_list_events`, `calendar_search`, `calendar_get_event`, `calendar_create_event`, `calendar_update_event`, `calendar_delete_event`, `calendar_quick_add_event`
 
 **Drive:** `drive_list_files`, `drive_get_metadata`, `drive_read_file`, `drive_create_folder`, `drive_create_text_file`, `drive_update_text_file`, `drive_rename_file`, `drive_move_file`, `drive_copy_file`, `drive_trash_file`, `drive_share_file`
 
-**Docs:** `docs_create`, `docs_read`, `docs_append_text`, `docs_replace_text`
+**Docs:** `docs_create`, `docs_read`, `docs_append_text`, `docs_replace_text`, `docs_create_markdown`, `docs_append_markdown`, `docs_replace_with_markdown`
 
 **Sheets:** `sheets_create`, `sheets_get_info`, `sheets_add_sheet`, `sheets_read_range`, `sheets_write_range`, `sheets_append_rows`, `sheets_clear_range`
 
@@ -141,9 +141,10 @@ Every tool takes an `account` parameter matching a key in `config.json`.
 - *"Do I have any unread emails in my work account?"*
 - *"Search all my accounts for invoices from the last month."*
 - *"What meetings do I have this week on my work calendar?"*
+- *"Add a 30-minute 'Design review' to my work calendar Friday at 2pm and invite alex@company.com."*
 - *"Find the 'Q3 planning' doc in my personal Drive and read it."*
 - *"Create a spreadsheet in my work account and add a header row plus three rows of data."*
-- *"Append a section to the doc at this ID with my notes."*
+- *"Turn these meeting notes into a formatted Google Doc with headings and a table."*
 
 ## Adding a new account
 
