@@ -1,12 +1,18 @@
 """Google Drive service wrapper (read-write) for the multi-account MCP server."""
 
 import io
+import mimetypes
+import os
 from typing import Any, Dict, List, Optional
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+from googleapiclient.http import (
+    MediaFileUpload,
+    MediaIoBaseDownload,
+    MediaIoBaseUpload,
+)
 
 # Google-native MIME types and how to export them to text.
 _EXPORT_MAP = {
@@ -15,7 +21,7 @@ _EXPORT_MAP = {
     "application/vnd.google-apps.presentation": "text/plain",
 }
 
-_FILE_FIELDS = "id, name, mimeType, modifiedTime, size, owners(emailAddress), parents, webViewLink, trashed"
+_FILE_FIELDS = "id, name, mimeType, modifiedTime, size, owners(emailAddress), parents, webViewLink, webContentLink, trashed"
 
 
 class DriveService:
@@ -92,6 +98,54 @@ class DriveService:
             "content": text[:max_chars],
         }
 
+    def download_file(
+        self,
+        file_id: str,
+        save_path: str,
+        export_mime_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Download any Drive file's bytes to a local path (on the machine
+        running this server). Binary files download directly. Google-native
+        files (Docs/Sheets/Slides) must be exported — pass export_mime_type
+        (e.g. 'application/pdf')."""
+        meta = self.service.files().get(
+            fileId=file_id, fields="id, name, mimeType"
+        ).execute()
+        mime = meta.get("mimeType", "")
+
+        if mime.startswith("application/vnd.google-apps"):
+            if not export_mime_type:
+                raise ValueError(
+                    f"'{meta.get('name', file_id)}' is a Google-native file "
+                    f"({mime}). Pass export_mime_type (e.g. 'application/pdf') to "
+                    "export it, or use drive_read_file to get its text."
+                )
+            request = self.service.files().export_media(
+                fileId=file_id, mimeType=export_mime_type
+            )
+        else:
+            request = self.service.files().get_media(fileId=file_id)
+
+        buf = io.BytesIO()
+        downloader = MediaIoBaseDownload(buf, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        data = buf.getvalue()
+
+        full = os.path.expanduser(save_path)
+        parent = os.path.dirname(full)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(full, "wb") as fh:
+            fh.write(data)
+        return {
+            "saved_to": full,
+            "bytes": len(data),
+            "name": meta.get("name", ""),
+            "mimeType": export_mime_type or mime,
+        }
+
     # ------------------------------------------------------------------ write
 
     def create_folder(self, name: str, parent_id: Optional[str] = None) -> Dict[str, Any]:
@@ -131,6 +185,30 @@ class DriveService:
         ).execute()
         return self._parse_file(f)
 
+    def upload_file(
+        self,
+        path: str,
+        name: Optional[str] = None,
+        parent_id: Optional[str] = None,
+        mime_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Upload a local file (any type, including binary) to Drive. The path
+        is on the machine running this server."""
+        full = os.path.expanduser(path)
+        if not os.path.isfile(full):
+            raise ValueError(f"File not found: {path}")
+        if mime_type is None:
+            guessed, _ = mimetypes.guess_type(full)
+            mime_type = guessed or "application/octet-stream"
+        body: Dict[str, Any] = {"name": name or os.path.basename(full)}
+        if parent_id:
+            body["parents"] = [parent_id]
+        media = MediaFileUpload(full, mimetype=mime_type, resumable=True)
+        f = self.service.files().create(
+            body=body, media_body=media, fields=_FILE_FIELDS
+        ).execute()
+        return self._parse_file(f)
+
     def rename_file(self, file_id: str, new_name: str) -> Dict[str, Any]:
         f = self.service.files().update(
             fileId=file_id, body={"name": new_name}, fields=_FILE_FIELDS
@@ -166,6 +244,14 @@ class DriveService:
         role: str = "reader",
         notify: bool = False,
     ) -> Dict[str, Any]:
+        # Guard against unintended escalation. 'owner' would transfer ownership
+        # of the user's file; reject it. Only allow the safe sharing roles.
+        allowed_roles = {"reader", "commenter", "writer"}
+        if role not in allowed_roles:
+            raise ValueError(
+                f"Invalid role '{role}'. Allowed: {', '.join(sorted(allowed_roles))} "
+                "(ownership transfer is not permitted through this tool)."
+            )
         permission = {"type": "user", "role": role, "emailAddress": email}
         result = self.service.permissions().create(
             fileId=file_id,
@@ -187,5 +273,8 @@ class DriveService:
             "owners": [o.get("emailAddress", "") for o in f.get("owners", [])],
             "parents": f.get("parents", []),
             "webViewLink": f.get("webViewLink", ""),
+            # Direct-download URL. Present for binary/uploaded files; Google-native
+            # Docs/Sheets/Slides don't have one (use webViewLink for those).
+            "webContentLink": f.get("webContentLink", ""),
             "trashed": f.get("trashed", False),
         }

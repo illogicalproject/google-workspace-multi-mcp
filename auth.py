@@ -17,15 +17,22 @@ SERVICE_SCOPES = {
         "https://www.googleapis.com/auth/gmail.modify",
     ],
     # calendar.events grants read + create/edit/delete of events (a "sensitive"
-    # scope). Use this instead of calendar.readonly so the write tools work.
-    "calendar": ["https://www.googleapis.com/auth/calendar.events"],
+    # scope). calendar.freebusy is needed for the availability query
+    # (calendar.events alone does not authorize freebusy.query). Both sensitive.
+    "calendar": [
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.freebusy",
+    ],
     "drive": ["https://www.googleapis.com/auth/drive"],
     "drive.file": ["https://www.googleapis.com/auth/drive.file"],
     "docs": ["https://www.googleapis.com/auth/documents"],
     "sheets": ["https://www.googleapis.com/auth/spreadsheets"],
+    # tasks (read/write) is a sensitive scope; contacts.readonly is sensitive too.
+    "tasks": ["https://www.googleapis.com/auth/tasks"],
+    "contacts": ["https://www.googleapis.com/auth/contacts.readonly"],
 }
 
-DEFAULT_SERVICES = ["gmail", "calendar", "drive", "docs", "sheets"]
+DEFAULT_SERVICES = ["gmail", "calendar", "drive", "docs", "sheets", "tasks", "contacts"]
 
 
 def build_scopes(services: Optional[Iterable[str]] = None) -> List[str]:

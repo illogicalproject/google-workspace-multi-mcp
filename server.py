@@ -27,10 +27,12 @@ from config import (
     load_config,
 )
 from gcalendar import CalendarService
+from gcontacts import ContactsService
 from gdocs import DocsService
 from gdrive import DriveService
 from gmail import GmailService
 from gsheets import SheetsService
+from gtasks import TasksService
 
 # ---------------------------------------------------------------------------
 # Bootstrap: load config and auth manager at startup
@@ -55,7 +57,7 @@ if "drive.file" in _enabled_services:
 
 
 def _service_of(tool_name: str) -> str | None:
-    for prefix in ("gmail", "calendar", "drive", "docs", "sheets"):
+    for prefix in ("gmail", "calendar", "drive", "docs", "sheets", "tasks", "contacts"):
         if tool_name.startswith(prefix + "_"):
             return prefix
     return None
@@ -99,6 +101,14 @@ def _get_docs(account_name: str) -> DocsService:
 
 def _get_sheets(account_name: str) -> SheetsService:
     return SheetsService(_get_creds(account_name), account_name)
+
+
+def _get_tasks(account_name: str) -> TasksService:
+    return TasksService(_get_creds(account_name), account_name)
+
+
+def _get_contacts(account_name: str) -> ContactsService:
+    return ContactsService(_get_creds(account_name), account_name)
 
 
 def _fmt(data: Any) -> list[types.TextContent]:
@@ -222,9 +232,15 @@ async def list_tools() -> list[types.Tool]:
                         "description": "Recipient(s), comma-separated",
                     },
                     "subject": {"type": "string", "description": "Email subject"},
-                    "body": {"type": "string", "description": "Email body (plain text)"},
+                    "body": {"type": "string", "description": "Email body (plain text, or HTML if html=true)"},
                     "cc": {"type": "string", "description": "CC recipients, comma-separated"},
                     "bcc": {"type": "string", "description": "BCC recipients, comma-separated"},
+                    "html": {"type": "boolean", "description": "Send body as HTML instead of plain text", "default": False},
+                    "attachments": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Local file paths to attach (on the machine running this server, e.g. '~/Desktop/resume.pdf')",
+                    },
                 },
                 "required": ["account", "to", "subject", "body"],
             },
@@ -255,9 +271,15 @@ async def list_tools() -> list[types.Tool]:
                         "type": "string",
                         "description": "Subject (typically Re: original subject)",
                     },
-                    "body": {"type": "string", "description": "Reply body (plain text)"},
+                    "body": {"type": "string", "description": "Reply body (plain text, or HTML if html=true)"},
                     "cc": {"type": "string", "description": "CC recipients, comma-separated"},
                     "bcc": {"type": "string", "description": "BCC recipients, comma-separated"},
+                    "html": {"type": "boolean", "description": "Send body as HTML instead of plain text", "default": False},
+                    "attachments": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Local file paths to attach (on the machine running this server)",
+                    },
                 },
                 "required": ["account", "thread_id", "message_id", "to", "subject", "body"],
             },
@@ -274,9 +296,15 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "to": {"type": "string", "description": "Recipient(s), comma-separated"},
                     "subject": {"type": "string", "description": "Email subject"},
-                    "body": {"type": "string", "description": "Email body (plain text)"},
+                    "body": {"type": "string", "description": "Email body (plain text, or HTML if html=true)"},
                     "cc": {"type": "string", "description": "CC recipients"},
                     "bcc": {"type": "string", "description": "BCC recipients"},
+                    "html": {"type": "boolean", "description": "Save body as HTML instead of plain text", "default": False},
+                    "attachments": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Local file paths to attach (on the machine running this server)",
+                    },
                 },
                 "required": ["account", "to", "subject", "body"],
             },
@@ -343,6 +371,24 @@ async def list_tools() -> list[types.Tool]:
                     "message_id": {"type": "string", "description": "Gmail message ID"},
                 },
                 "required": ["account", "message_id"],
+            },
+        ),
+        types.Tool(
+            name="gmail_get_attachment",
+            description=(
+                "Download an attachment from a Gmail message to a local file. "
+                "Get the attachment_id from the 'attachments' list returned when "
+                "reading a message or thread."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account that owns the message"},
+                    "message_id": {"type": "string", "description": "Gmail message ID"},
+                    "attachment_id": {"type": "string", "description": "Attachment ID (from the message's 'attachments' list)"},
+                    "save_path": {"type": "string", "description": "Local path to save to (on the machine running this server, e.g. '~/Downloads/file.pdf')"},
+                },
+                "required": ["account", "message_id", "attachment_id", "save_path"],
             },
         ),
         # ── Calendar tools ──────────────────────────────────────────────────
@@ -548,6 +594,28 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["account", "text"],
             },
         ),
+        types.Tool(
+            name="calendar_free_busy",
+            description=(
+                "Look up busy/free intervals over a time window for one or more "
+                "calendars. Use to find open slots before scheduling. Returns the "
+                "busy blocks; anything not listed is free. Times are RFC3339."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "time_min": {"type": "string", "description": "Start of window (RFC3339), e.g. '2026-06-22T00:00:00-07:00'"},
+                    "time_max": {"type": "string", "description": "End of window (RFC3339)"},
+                    "calendar_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Calendar IDs to check (default ['primary']). Use calendar_list_calendars for IDs.",
+                    },
+                },
+                "required": ["account", "time_min", "time_max"],
+            },
+        ),
         # ── Drive tools ─────────────────────────────────────────────────────
         types.Tool(
             name="drive_list_files",
@@ -702,6 +770,42 @@ async def list_tools() -> list[types.Tool]:
                     "notify": {"type": "boolean", "description": "Send notification email (default false)", "default": False},
                 },
                 "required": ["account", "file_id", "email"],
+            },
+        ),
+        types.Tool(
+            name="drive_upload_file",
+            description=(
+                "Upload a local file (any type, including binary like PDF/image/zip) "
+                "to Drive. The path is on the machine running this server."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "path": {"type": "string", "description": "Local file path (e.g. '~/Desktop/deck.pdf')"},
+                    "name": {"type": "string", "description": "Name in Drive (default: the file's basename)"},
+                    "parent_id": {"type": "string", "description": "Destination folder ID (optional; defaults to My Drive root)"},
+                    "mime_type": {"type": "string", "description": "MIME type override (optional; guessed from the extension)"},
+                },
+                "required": ["account", "path"],
+            },
+        ),
+        types.Tool(
+            name="drive_download_file",
+            description=(
+                "Download a Drive file's bytes to a local path (on the machine running "
+                "this server). Binary files download directly. For Google-native files "
+                "(Docs/Sheets/Slides) pass export_mime_type, e.g. 'application/pdf'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "file_id": {"type": "string", "description": "Drive file ID"},
+                    "save_path": {"type": "string", "description": "Local path to save to (e.g. '~/Downloads/file.pdf')"},
+                    "export_mime_type": {"type": "string", "description": "Export format for Google-native files, e.g. 'application/pdf' or 'text/csv'"},
+                },
+                "required": ["account", "file_id", "save_path"],
             },
         ),
         # ── Docs tools ──────────────────────────────────────────────────────
@@ -911,6 +1015,119 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["account", "spreadsheet_id", "range"],
             },
         ),
+        # ── Tasks tools ─────────────────────────────────────────────────────
+        types.Tool(
+            name="tasks_list_tasklists",
+            description="List the Google Tasks task lists for an account (each has an id and title).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                },
+                "required": ["account"],
+            },
+        ),
+        types.Tool(
+            name="tasks_list_tasks",
+            description="List tasks in a task list (default the account's default list).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "tasklist": {"type": "string", "description": "Task list ID (default '@default')", "default": "@default"},
+                    "show_completed": {"type": "boolean", "description": "Include completed tasks (default false)", "default": False},
+                    "max_results": {"type": "integer", "description": "Max tasks (default 100)", "default": 100},
+                },
+                "required": ["account"],
+            },
+        ),
+        types.Tool(
+            name="tasks_create_task",
+            description="Add a task to a task list.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "title": {"type": "string", "description": "Task title"},
+                    "tasklist": {"type": "string", "description": "Task list ID (default '@default')", "default": "@default"},
+                    "notes": {"type": "string", "description": "Task notes/details"},
+                    "due": {"type": "string", "description": "Due date, RFC3339 (only the date part is honored), e.g. '2026-06-30T00:00:00Z'"},
+                },
+                "required": ["account", "title"],
+            },
+        ),
+        types.Tool(
+            name="tasks_update_task",
+            description="Update a task's title, notes, due date, or status ('needsAction' | 'completed').",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "task_id": {"type": "string", "description": "Task ID"},
+                    "tasklist": {"type": "string", "description": "Task list ID (default '@default')", "default": "@default"},
+                    "title": {"type": "string", "description": "New title"},
+                    "notes": {"type": "string", "description": "New notes"},
+                    "due": {"type": "string", "description": "New due date (RFC3339)"},
+                    "status": {"type": "string", "description": "'needsAction' or 'completed'"},
+                },
+                "required": ["account", "task_id"],
+            },
+        ),
+        types.Tool(
+            name="tasks_complete_task",
+            description="Mark a task as completed.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "task_id": {"type": "string", "description": "Task ID"},
+                    "tasklist": {"type": "string", "description": "Task list ID (default '@default')", "default": "@default"},
+                },
+                "required": ["account", "task_id"],
+            },
+        ),
+        types.Tool(
+            name="tasks_delete_task",
+            description="Delete a task from a task list.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "task_id": {"type": "string", "description": "Task ID"},
+                    "tasklist": {"type": "string", "description": "Task list ID (default '@default')", "default": "@default"},
+                },
+                "required": ["account", "task_id"],
+            },
+        ),
+        # ── Contacts tools ──────────────────────────────────────────────────
+        types.Tool(
+            name="contacts_search",
+            description=(
+                "Search the account's Google Contacts by name, email, phone, or "
+                "organization. Use to look up someone's email address before sending mail."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "query": {"type": "string", "description": "Search text (name, email, etc.)"},
+                    "max_results": {"type": "integer", "description": "Max contacts (default 15, max 30)", "default": 15},
+                },
+                "required": ["account", "query"],
+            },
+        ),
+        types.Tool(
+            name="contacts_list",
+            description="List the account's saved contacts (most recently modified first).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "max_results": {"type": "integer", "description": "Max contacts (default 50, max 200)", "default": 50},
+                },
+                "required": ["account"],
+            },
+        ),
     ]
 
     return [
@@ -995,6 +1212,8 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 body=args["body"],
                 cc=args.get("cc", ""),
                 bcc=args.get("bcc", ""),
+                html=bool(args.get("html", False)),
+                attachments=args.get("attachments"),
             )
             return _fmt({
                 "status": "sent",
@@ -1013,6 +1232,8 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 body=args["body"],
                 cc=args.get("cc", ""),
                 bcc=args.get("bcc", ""),
+                html=bool(args.get("html", False)),
+                attachments=args.get("attachments"),
             )
             return _fmt({
                 "status": "sent",
@@ -1029,6 +1250,8 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 body=args["body"],
                 cc=args.get("cc", ""),
                 bcc=args.get("bcc", ""),
+                html=bool(args.get("html", False)),
+                attachments=args.get("attachments"),
             )
             return _fmt({"status": "draft created", "draft_id": result.get("id")})
 
@@ -1058,6 +1281,15 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
             svc = _get_service(args["account"])
             svc.trash_message(args["message_id"])
             return _fmt({"status": "moved to trash", "message_id": args["message_id"]})
+
+        # ---- gmail_get_attachment -----------------------------------------
+        elif name == "gmail_get_attachment":
+            svc = _get_service(args["account"])
+            return _fmt(svc.get_attachment(
+                message_id=args["message_id"],
+                attachment_id=args["attachment_id"],
+                save_path=args["save_path"],
+            ))
 
         # ---- calendar_list_calendars --------------------------------------
         elif name == "calendar_list_calendars":
@@ -1147,6 +1379,15 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 send_updates=args.get("send_updates", "none"),
             ))
 
+        # ---- calendar_free_busy -------------------------------------------
+        elif name == "calendar_free_busy":
+            svc = _get_calendar(args["account"])
+            return _fmt(svc.free_busy(
+                time_min=args["time_min"],
+                time_max=args["time_max"],
+                calendar_ids=args.get("calendar_ids"),
+            ))
+
         # ---- Drive --------------------------------------------------------
         elif name == "drive_list_files":
             svc = _get_drive(args["account"])
@@ -1208,6 +1449,23 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 email=args["email"],
                 role=args.get("role", "reader"),
                 notify=bool(args.get("notify", False)),
+            ))
+
+        elif name == "drive_upload_file":
+            svc = _get_drive(args["account"])
+            return _fmt(svc.upload_file(
+                path=args["path"],
+                name=args.get("name"),
+                parent_id=args.get("parent_id"),
+                mime_type=args.get("mime_type"),
+            ))
+
+        elif name == "drive_download_file":
+            svc = _get_drive(args["account"])
+            return _fmt(svc.download_file(
+                file_id=args["file_id"],
+                save_path=args["save_path"],
+                export_mime_type=args.get("export_mime_type"),
             ))
 
         # ---- Docs ---------------------------------------------------------
@@ -1272,6 +1530,67 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
         elif name == "sheets_clear_range":
             svc = _get_sheets(args["account"])
             return _fmt(svc.clear_range(args["spreadsheet_id"], args["range"]))
+
+        # ---- Tasks --------------------------------------------------------
+        elif name == "tasks_list_tasklists":
+            svc = _get_tasks(args["account"])
+            return _fmt(svc.list_tasklists())
+
+        elif name == "tasks_list_tasks":
+            svc = _get_tasks(args["account"])
+            return _fmt(svc.list_tasks(
+                tasklist=args.get("tasklist", "@default"),
+                show_completed=bool(args.get("show_completed", False)),
+                max_results=int(args.get("max_results", 100)),
+            ))
+
+        elif name == "tasks_create_task":
+            svc = _get_tasks(args["account"])
+            return _fmt(svc.create_task(
+                title=args["title"],
+                tasklist=args.get("tasklist", "@default"),
+                notes=args.get("notes"),
+                due=args.get("due"),
+            ))
+
+        elif name == "tasks_update_task":
+            svc = _get_tasks(args["account"])
+            return _fmt(svc.update_task(
+                task_id=args["task_id"],
+                tasklist=args.get("tasklist", "@default"),
+                title=args.get("title"),
+                notes=args.get("notes"),
+                due=args.get("due"),
+                status=args.get("status"),
+            ))
+
+        elif name == "tasks_complete_task":
+            svc = _get_tasks(args["account"])
+            return _fmt(svc.complete_task(
+                task_id=args["task_id"],
+                tasklist=args.get("tasklist", "@default"),
+            ))
+
+        elif name == "tasks_delete_task":
+            svc = _get_tasks(args["account"])
+            return _fmt(svc.delete_task(
+                task_id=args["task_id"],
+                tasklist=args.get("tasklist", "@default"),
+            ))
+
+        # ---- Contacts -----------------------------------------------------
+        elif name == "contacts_search":
+            svc = _get_contacts(args["account"])
+            return _fmt(svc.search(
+                query=args["query"],
+                max_results=int(args.get("max_results", 15)),
+            ))
+
+        elif name == "contacts_list":
+            svc = _get_contacts(args["account"])
+            return _fmt(svc.list_contacts(
+                max_results=int(args.get("max_results", 50)),
+            ))
 
         else:
             return _fmt(f"Unknown tool: {name}")

@@ -1,5 +1,9 @@
 import base64
+import mimetypes
+import os
 import re
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any, Dict, List, Optional
@@ -65,6 +69,70 @@ class GmailService:
 
     # ------------------------------------------------------------------ send / draft
 
+    @staticmethod
+    def _safe_header(value: str) -> str:
+        """Reject CR/LF in header values to prevent header injection.
+
+        Recipient and subject fields are often populated from untrusted content
+        (forwarded mail, scraped text). A newline would let a caller smuggle in
+        extra headers (Bcc, spoofed From) or a second body."""
+        if value and ("\n" in value or "\r" in value):
+            raise ValueError(
+                "Invalid header value: line breaks are not allowed in "
+                "email recipients or subject."
+            )
+        return value
+
+    def _build_message(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: str = "",
+        bcc: str = "",
+        html: bool = False,
+        attachments: Optional[List[str]] = None,
+    ):
+        """Construct a MIME message. body is sent as HTML when html=True, else
+        plain text. Uses multipart only when attachments are present."""
+        subtype = "html" if html else "plain"
+        attachments = attachments or []
+        if attachments:
+            msg: Any = MIMEMultipart()
+            msg.attach(MIMEText(body, subtype))
+            for path in attachments:
+                self._attach_file(msg, path)
+        else:
+            msg = MIMEText(body, subtype)
+        msg["to"] = self._safe_header(to)
+        msg["subject"] = self._safe_header(subject)
+        if cc:
+            msg["cc"] = self._safe_header(cc)
+        if bcc:
+            msg["bcc"] = self._safe_header(bcc)
+        return msg
+
+    @staticmethod
+    def _attach_file(msg: MIMEMultipart, path: str) -> None:
+        """Read a local file and attach it. The path is on the machine running
+        this server (not wherever the model is)."""
+        full = os.path.expanduser(path)
+        if not os.path.isfile(full):
+            raise ValueError(f"Attachment not found: {path}")
+        ctype, encoding = mimetypes.guess_type(full)
+        if ctype is None or encoding is not None:
+            ctype = "application/octet-stream"
+        maintype, subtype = ctype.split("/", 1)
+        with open(full, "rb") as f:
+            data = f.read()
+        part = MIMEBase(maintype, subtype)
+        part.set_payload(data)
+        encoders.encode_base64(part)
+        part.add_header(
+            "Content-Disposition", "attachment", filename=os.path.basename(full)
+        )
+        msg.attach(part)
+
     def send_message(
         self,
         to: str,
@@ -72,15 +140,10 @@ class GmailService:
         body: str,
         cc: str = "",
         bcc: str = "",
+        html: bool = False,
+        attachments: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        msg = MIMEText(body, "plain")
-        msg["to"] = to
-        msg["subject"] = subject
-        if cc:
-            msg["cc"] = cc
-        if bcc:
-            msg["bcc"] = bcc
-
+        msg = self._build_message(to, subject, body, cc, bcc, html, attachments)
         return self.service.users().messages().send(
             userId="me", body={"raw": self._encode(msg)}
         ).execute()
@@ -94,21 +157,39 @@ class GmailService:
         body: str,
         cc: str = "",
         bcc: str = "",
+        html: bool = False,
+        attachments: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        msg = MIMEText(body, "plain")
-        msg["to"] = to
-        msg["subject"] = subject
-        msg["In-Reply-To"] = message_id
-        msg["References"] = message_id
-        if cc:
-            msg["cc"] = cc
-        if bcc:
-            msg["bcc"] = bcc
+        msg = self._build_message(to, subject, body, cc, bcc, html, attachments)
+        # Threading needs the original's RFC822 Message-ID header
+        # (e.g. <CA+abc@mail.gmail.com>), NOT Gmail's internal message id.
+        # Without it the reply won't thread in non-Gmail clients.
+        rfc_message_id = self._rfc_message_id(message_id)
+        if rfc_message_id:
+            msg["In-Reply-To"] = rfc_message_id
+            msg["References"] = rfc_message_id
 
         return self.service.users().messages().send(
             userId="me",
             body={"raw": self._encode(msg), "threadId": thread_id},
         ).execute()
+
+    def _rfc_message_id(self, gmail_message_id: str) -> str:
+        """Look up the RFC822 'Message-ID' header for a Gmail message id.
+        Returns '' if it can't be found (reply still sends via threadId)."""
+        try:
+            meta = self.service.users().messages().get(
+                userId="me",
+                id=gmail_message_id,
+                format="metadata",
+                metadataHeaders=["Message-ID"],
+            ).execute()
+        except Exception:
+            return ""
+        for h in meta.get("payload", {}).get("headers", []):
+            if h.get("name", "").lower() == "message-id":
+                return h.get("value", "")
+        return ""
 
     def create_draft(
         self,
@@ -117,15 +198,10 @@ class GmailService:
         body: str,
         cc: str = "",
         bcc: str = "",
+        html: bool = False,
+        attachments: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        msg = MIMEText(body, "plain")
-        msg["to"] = to
-        msg["subject"] = subject
-        if cc:
-            msg["cc"] = cc
-        if bcc:
-            msg["bcc"] = bcc
-
+        msg = self._build_message(to, subject, body, cc, bcc, html, attachments)
         return self.service.users().drafts().create(
             userId="me", body={"message": {"raw": self._encode(msg)}}
         ).execute()
@@ -176,6 +252,25 @@ class GmailService:
             userId="me", id=message_id
         ).execute()
 
+    # ------------------------------------------------------------------ attachments
+
+    def get_attachment(
+        self, message_id: str, attachment_id: str, save_path: str
+    ) -> Dict[str, Any]:
+        """Download a message attachment (by the attachmentId surfaced when
+        reading a message) and write it to a local path on this machine."""
+        att = self.service.users().messages().attachments().get(
+            userId="me", messageId=message_id, id=attachment_id
+        ).execute()
+        data = base64.urlsafe_b64decode(att["data"].encode())
+        full = os.path.expanduser(save_path)
+        parent = os.path.dirname(full)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(full, "wb") as f:
+            f.write(data)
+        return {"saved_to": full, "bytes": len(data)}
+
     # ------------------------------------------------------------------ internals
 
     def _get_raw_message(self, message_id: str, format: str = "full") -> Dict[str, Any]:
@@ -190,6 +285,7 @@ class GmailService:
             headers[h["name"].lower()] = h["value"]
 
         body = self._extract_body(payload)
+        attachments = self._extract_attachments(payload)
 
         return {
             "id": msg.get("id", ""),
@@ -202,7 +298,29 @@ class GmailService:
             "cc": headers.get("cc", ""),
             "subject": headers.get("subject", "(no subject)"),
             "body": body,
+            "attachments": attachments,
+            "hasAttachments": bool(attachments),
         }
+
+    def _extract_attachments(
+        self, payload: Dict[str, Any], acc: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
+        """Walk the MIME tree and collect attachment parts (filename + a
+        downloadable attachmentId). Use get_attachment to fetch the bytes."""
+        if acc is None:
+            acc = []
+        filename = payload.get("filename") or ""
+        body = payload.get("body", {})
+        if filename and body.get("attachmentId"):
+            acc.append({
+                "filename": filename,
+                "mimeType": payload.get("mimeType", ""),
+                "size": body.get("size", 0),
+                "attachmentId": body["attachmentId"],
+            })
+        for part in payload.get("parts", []) or []:
+            self._extract_attachments(part, acc)
+        return acc
 
     def _extract_body(self, payload: Dict[str, Any]) -> str:
         if not payload:

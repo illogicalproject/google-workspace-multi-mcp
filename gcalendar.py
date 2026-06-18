@@ -200,6 +200,37 @@ class CalendarService:
         ).execute()
         return self._parse_event(event)
 
+    # ------------------------------------------------------------------ availability
+
+    def free_busy(
+        self,
+        time_min: str,
+        time_max: str,
+        calendar_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Return busy intervals for one or more calendars over a window.
+        time_min/time_max are RFC3339. Defaults to the primary calendar."""
+        cals = calendar_ids or ["primary"]
+        body = {
+            "timeMin": time_min,
+            "timeMax": time_max,
+            "items": [{"id": c} for c in cals],
+        }
+        result = self.service.freebusy().query(body=body).execute()
+        calendars = result.get("calendars", {})
+        return {
+            "timeMin": time_min,
+            "timeMax": time_max,
+            "busy": {
+                cid: info.get("busy", []) for cid, info in calendars.items()
+            },
+            "errors": {
+                cid: info["errors"]
+                for cid, info in calendars.items()
+                if info.get("errors")
+            },
+        }
+
     # ------------------------------------------------------------------ internals
 
     def _time_field(

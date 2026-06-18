@@ -7,11 +7,13 @@ The official Claude Google connector authenticates **one** account at a time. Th
 ## Features
 
 - **Multiple accounts** — connect as many Google accounts as you like; every tool takes an `account` parameter
-- **Gmail** — unified search across all accounts, read messages/threads, send, threaded replies, drafts, labels, trash
-- **Calendar** (read/write) — list calendars, browse and search events, and create, update, delete, or quick-add events (with attendees and optional Google Meet links)
-- **Drive** (read/write) — list/search files, read content, create files & folders, rename, move, copy, trash, share
+- **Gmail** — unified search across all accounts, read messages/threads, send, threaded replies, drafts, labels, trash, **HTML-formatted email**, **file attachments** (send and download)
+- **Calendar** (read/write) — list calendars, browse and search events, create, update, delete, or quick-add events (with attendees and optional Google Meet links), recurring series, and **free/busy availability lookup**
+- **Drive** (read/write) — list/search files, read content, **upload and download any file (incl. binary like PDF/image)**, create files & folders, rename, move, copy, trash, share
 - **Docs** (read/write) — create, read, append, find-and-replace, plus **Markdown rendering** — turn Markdown into real Docs formatting (headings, bold/italic, `code`, links, bullet & numbered lists, blockquotes, tables)
 - **Sheets** (read/write) — create, add tabs, read/write/append ranges, clear
+- **Tasks** (read/write) — list task lists and tasks, create, update, complete, delete
+- **Contacts** (read) — search and list contacts (look up an email address by name before sending)
 
 ## Requirements
 
@@ -78,7 +80,7 @@ Edit `config.json` — the keys (`personal`, `work`, …) are the names you'll u
 }
 ```
 
-The optional **`services`** list controls which Google services are enabled — both the OAuth scopes requested *and* the tools exposed to Claude. Omit it to enable everything. Trim it to request fewer permissions and get a milder consent screen (see [Scopes](#scopes--permissions)). Valid entries: `gmail`, `calendar`, `drive`, `drive.file`, `docs`, `sheets`. Use `drive.file` instead of `drive` for per-file (non-restricted) Drive access.
+The optional **`services`** list controls which Google services are enabled — both the OAuth scopes requested *and* the tools exposed to Claude. Omit it to enable everything. Trim it to request fewer permissions and get a milder consent screen (see [Scopes](#scopes--permissions)). Valid entries: `gmail`, `calendar`, `drive`, `drive.file`, `docs`, `sheets`, `tasks`, `contacts`. Use `drive.file` instead of `drive` for per-file (non-restricted) Drive access.
 
 ### 5. Authenticate
 
@@ -113,10 +115,12 @@ Scopes follow the `services` list in `config.json` (see step 4) — enable only 
 | Service | Scope | Google tier |
 |---|---|---|
 | Gmail | `gmail.readonly`, `gmail.send`, `gmail.compose`, `gmail.modify` | **Restricted** |
-| Calendar | `calendar.events` (read + create/edit/delete events) | Sensitive |
+| Calendar | `calendar.events` (read + create/edit/delete events), `calendar.freebusy` (availability lookup) | Sensitive |
 | Drive | `drive` (full read/write) | **Restricted** |
 | Docs | `documents` | Sensitive |
 | Sheets | `spreadsheets` | Sensitive |
+| Tasks | `tasks` | Sensitive |
+| Contacts | `contacts.readonly` | Sensitive |
 
 The **restricted** scopes (Gmail, full Drive) are what trigger the most prominent warning and would require the paid CASA assessment to verify. If you want a quieter, lower-risk setup: drop the Gmail scopes and swap `drive` for `drive.file` (per-file access, non-sensitive). A Calendar/Docs/Sheets/`drive.file` configuration uses only sensitive/non-sensitive scopes.
 
@@ -126,15 +130,21 @@ Every tool takes an `account` parameter matching a key in `config.json`.
 
 **Accounts:** `list_accounts`
 
-**Gmail:** `gmail_get_profile`, `gmail_search`, `gmail_read_message`, `gmail_read_thread`, `gmail_send`, `gmail_reply`, `gmail_create_draft`, `gmail_list_drafts`, `gmail_list_labels`, `gmail_modify_labels`, `gmail_trash`
+**Gmail:** `gmail_get_profile`, `gmail_search`, `gmail_read_message`, `gmail_read_thread`, `gmail_send`, `gmail_reply`, `gmail_create_draft`, `gmail_list_drafts`, `gmail_list_labels`, `gmail_modify_labels`, `gmail_trash`, `gmail_get_attachment`
 
-**Calendar:** `calendar_list_calendars`, `calendar_list_events`, `calendar_search`, `calendar_get_event`, `calendar_create_event`, `calendar_update_event`, `calendar_delete_event`, `calendar_quick_add_event`
+`gmail_send`, `gmail_reply`, and `gmail_create_draft` take `html: true` to send an HTML body, and `attachments: [paths]` to attach local files (paths are on the machine running the server). Reading a message returns an `attachments` list — pass a file's `attachmentId` to `gmail_get_attachment` to download it.
 
-**Drive:** `drive_list_files`, `drive_get_metadata`, `drive_read_file`, `drive_create_folder`, `drive_create_text_file`, `drive_update_text_file`, `drive_rename_file`, `drive_move_file`, `drive_copy_file`, `drive_trash_file`, `drive_share_file`
+**Calendar:** `calendar_list_calendars`, `calendar_list_events`, `calendar_search`, `calendar_get_event`, `calendar_create_event`, `calendar_update_event`, `calendar_delete_event`, `calendar_quick_add_event`, `calendar_free_busy`
+
+**Drive:** `drive_list_files`, `drive_get_metadata`, `drive_read_file`, `drive_download_file`, `drive_upload_file`, `drive_create_folder`, `drive_create_text_file`, `drive_update_text_file`, `drive_rename_file`, `drive_move_file`, `drive_copy_file`, `drive_trash_file`, `drive_share_file`
 
 **Docs:** `docs_create`, `docs_read`, `docs_append_text`, `docs_replace_text`, `docs_create_markdown`, `docs_append_markdown`, `docs_replace_with_markdown`
 
 **Sheets:** `sheets_create`, `sheets_get_info`, `sheets_add_sheet`, `sheets_read_range`, `sheets_write_range`, `sheets_append_rows`, `sheets_clear_range`
+
+**Tasks:** `tasks_list_tasklists`, `tasks_list_tasks`, `tasks_create_task`, `tasks_update_task`, `tasks_complete_task`, `tasks_delete_task`
+
+**Contacts:** `contacts_search`, `contacts_list`
 
 ## Usage examples
 
@@ -143,6 +153,11 @@ Every tool takes an `account` parameter matching a key in `config.json`.
 - *"What meetings do I have this week on my work calendar?"*
 - *"Add a 30-minute 'Design review' to my work calendar Friday at 2pm and invite alex@company.com."*
 - *"Book a weekly 1:1 every Monday at 9am for the next 8 weeks."* (recurring series)
+- *"When am I free on my work calendar between Tuesday and Thursday?"* (free/busy)
+- *"Email the Q3 deck to alex@company.com — attach ~/Desktop/q3.pdf and make the body nicely formatted."* (attachment + HTML)
+- *"Save the PDF attached to that invoice email to my Downloads folder."* (download attachment)
+- *"Upload ~/Desktop/deck.pdf to my work Drive and share it with alex@company.com."* (binary upload + share)
+- *"Export the 'Q3 planning' Doc to PDF and download it to ~/Downloads."* (download with export)
 - *"Find the 'Q3 planning' doc in my personal Drive and read it."*
 - *"Create a spreadsheet in my work account and add a header row plus three rows of data."*
 - *"Turn these meeting notes into a formatted Google Doc with headings and a table."*
@@ -166,6 +181,19 @@ Note: editing or deleting **one instance** vs. the **whole series** depends on w
 2. Add the email as a Test user on the OAuth consent screen (if still in Testing).
 3. Run `python setup_auth.py` — it only prompts for accounts that aren't authenticated yet.
 4. Restart Claude Desktop.
+
+## What changes your data
+
+Most tools are read-only. These ones **write, send, or delete** — the model can invoke them, so know what they do:
+
+- **Gmail:** `gmail_send` and `gmail_reply` send real email immediately (no draft step), including any `attachments` you pass; `gmail_trash` moves a message to Trash (recoverable); `gmail_modify_labels` can remove system labels like `INBOX`/`UNREAD`. `gmail_get_attachment` writes a file to the local machine running the server.
+- **Calendar:** `calendar_create_event` / `calendar_update_event` / `calendar_delete_event` write to your calendar and can notify attendees (`send_updates`). For a recurring series, editing/deleting the **series ID** changes every occurrence; the **instance ID** changes just one.
+- **Drive:** `drive_create_*`, `drive_upload_file`, `drive_update_text_file`, `drive_rename_file`, `drive_move_file`, `drive_trash_file` (recoverable), and `drive_share_file` (grants another person access — `owner` transfers are blocked). `drive_download_file` writes a file to the local machine running the server.
+- **Docs:** `docs_append_*`, `docs_replace_text`, and `docs_replace_with_markdown` (which **clears the doc body** first).
+- **Sheets:** `sheets_write_range` overwrites cells, and `sheets_clear_range` with a bare sheet name (e.g. `"Sheet1"`) clears the **entire tab**.
+- **Tasks:** `tasks_create_task`, `tasks_update_task`, `tasks_complete_task`, and `tasks_delete_task` modify your Google Tasks. Contacts tools are read-only.
+
+Reading a Google Sheet via `drive_read_file` exports **only the first tab** as CSV; use the `sheets_*` tools for multi-tab spreadsheets.
 
 ## Security & privacy
 
