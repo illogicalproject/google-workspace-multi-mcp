@@ -1131,9 +1131,12 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="contacts_create",
             description=(
-                "Create a new contact in the account's Google Contacts. Provide at "
-                "least a name or email. Returns the new contact's resourceName "
-                "(e.g. people/c123), which is needed to update or delete it later."
+                "Create a new contact in the account's Google Contacts, capturing as "
+                "much as you have: name, job title + company, emails, phones, address, "
+                "birthday, URLs (e.g. LinkedIn), notes, and a profile photo. Pass "
+                "photo_url to pull a headshot from a URL (e.g. a LinkedIn profile "
+                "image). Returns the new contact's resourceName (e.g. people/c123), "
+                "needed to update or delete it later."
             ),
             inputSchema={
                 "type": "object",
@@ -1141,10 +1144,24 @@ async def list_tools() -> list[types.Tool]:
                     "account": {"type": "string", "description": "Account name"},
                     "name": {"type": "string", "description": "Full display name (used when given/family not supplied)"},
                     "given_name": {"type": "string", "description": "First name"},
+                    "middle_name": {"type": "string", "description": "Middle name"},
                     "family_name": {"type": "string", "description": "Last name"},
-                    "email": {"type": "string", "description": "Email address"},
-                    "phone": {"type": "string", "description": "Phone number"},
+                    "nickname": {"type": "string", "description": "Nickname"},
+                    "email": {"type": "string", "description": "Primary email address"},
+                    "emails": {"type": "array", "items": {"type": "string"}, "description": "Additional email addresses"},
+                    "phone": {"type": "string", "description": "Primary phone number"},
+                    "phones": {"type": "array", "items": {"type": "string"}, "description": "Additional phone numbers"},
                     "organization": {"type": "string", "description": "Company / organization"},
+                    "title": {"type": "string", "description": "Job title / role"},
+                    "department": {"type": "string", "description": "Department / team"},
+                    "address": {"type": "string", "description": "Mailing or location address (free text)"},
+                    "birthday": {"type": "string", "description": "Birthday (free text, e.g. 'March 14' or '1990-03-14')"},
+                    "url": {"type": "string", "description": "Primary URL (e.g. LinkedIn profile)"},
+                    "urls": {"type": "array", "items": {"type": "string"}, "description": "Additional URLs (website, portfolio, etc.)"},
+                    "notes": {"type": "string", "description": "Free-text notes / biography"},
+                    "occupation": {"type": "string", "description": "Occupation (when not tied to a specific company)"},
+                    "photo_url": {"type": "string", "description": "URL of a profile photo to set (e.g. a LinkedIn headshot)"},
+                    "photo_path": {"type": "string", "description": "Local file path of a profile photo (on the machine running the server)"},
                 },
                 "required": ["account"],
             },
@@ -1154,7 +1171,8 @@ async def list_tools() -> list[types.Tool]:
             description=(
                 "Update an existing contact. Identify it by resourceName "
                 "(e.g. people/c123, from contacts_search/contacts_list). Only the "
-                "fields you pass are changed; the contact's etag is handled automatically."
+                "fields you pass are changed; the contact's etag is handled "
+                "automatically. Pass photo_url/photo_path to set or replace the photo."
             ),
             inputSchema={
                 "type": "object",
@@ -1163,10 +1181,24 @@ async def list_tools() -> list[types.Tool]:
                     "resource_name": {"type": "string", "description": "Contact resourceName, e.g. people/c123"},
                     "name": {"type": "string", "description": "Full display name (used when given/family not supplied)"},
                     "given_name": {"type": "string", "description": "First name"},
+                    "middle_name": {"type": "string", "description": "Middle name"},
                     "family_name": {"type": "string", "description": "Last name"},
-                    "email": {"type": "string", "description": "Email address"},
-                    "phone": {"type": "string", "description": "Phone number"},
+                    "nickname": {"type": "string", "description": "Nickname"},
+                    "email": {"type": "string", "description": "Primary email address"},
+                    "emails": {"type": "array", "items": {"type": "string"}, "description": "Additional email addresses"},
+                    "phone": {"type": "string", "description": "Primary phone number"},
+                    "phones": {"type": "array", "items": {"type": "string"}, "description": "Additional phone numbers"},
                     "organization": {"type": "string", "description": "Company / organization"},
+                    "title": {"type": "string", "description": "Job title / role"},
+                    "department": {"type": "string", "description": "Department / team"},
+                    "address": {"type": "string", "description": "Mailing or location address (free text)"},
+                    "birthday": {"type": "string", "description": "Birthday (free text)"},
+                    "url": {"type": "string", "description": "Primary URL (e.g. LinkedIn profile)"},
+                    "urls": {"type": "array", "items": {"type": "string"}, "description": "Additional URLs"},
+                    "notes": {"type": "string", "description": "Free-text notes / biography"},
+                    "occupation": {"type": "string", "description": "Occupation"},
+                    "photo_url": {"type": "string", "description": "URL of a profile photo to set/replace"},
+                    "photo_path": {"type": "string", "description": "Local file path of a profile photo"},
                 },
                 "required": ["account", "resource_name"],
             },
@@ -1656,9 +1688,23 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 name=args.get("name"),
                 given_name=args.get("given_name"),
                 family_name=args.get("family_name"),
+                middle_name=args.get("middle_name"),
+                nickname=args.get("nickname"),
                 email=args.get("email"),
+                emails=args.get("emails"),
                 phone=args.get("phone"),
+                phones=args.get("phones"),
                 organization=args.get("organization"),
+                title=args.get("title"),
+                department=args.get("department"),
+                address=args.get("address"),
+                birthday=args.get("birthday"),
+                url=args.get("url"),
+                urls=args.get("urls"),
+                notes=args.get("notes"),
+                occupation=args.get("occupation"),
+                photo_url=args.get("photo_url"),
+                photo_path=args.get("photo_path"),
             ))
 
         elif name == "contacts_update":
@@ -1668,9 +1714,23 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 name=args.get("name"),
                 given_name=args.get("given_name"),
                 family_name=args.get("family_name"),
+                middle_name=args.get("middle_name"),
+                nickname=args.get("nickname"),
                 email=args.get("email"),
+                emails=args.get("emails"),
                 phone=args.get("phone"),
+                phones=args.get("phones"),
                 organization=args.get("organization"),
+                title=args.get("title"),
+                department=args.get("department"),
+                address=args.get("address"),
+                birthday=args.get("birthday"),
+                url=args.get("url"),
+                urls=args.get("urls"),
+                notes=args.get("notes"),
+                occupation=args.get("occupation"),
+                photo_url=args.get("photo_url"),
+                photo_path=args.get("photo_path"),
             ))
 
         elif name == "contacts_delete":
